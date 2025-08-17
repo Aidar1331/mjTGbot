@@ -1,0 +1,33 @@
+# Docker Compose override для Windows совместимости
+# Убираем проблемные Linux-специфичные настройки
+
+services:
+  # MJ Interaction - упрощаем для Windows
+  mj-interaction:
+    # Заменяем volumes на только необходимые
+    volumes:
+      - ./logs:/app/logs
+      # Убираем /dev/shm:/dev/shm для Windows
+    
+    # tmpfs - оставляем как в основном файле, без дублирования /dev/shm
+    tmpfs:
+      - /tmp:exec,mode=1777
+    
+    # Упрощенный entrypoint без shell команд
+    entrypoint: ["python", "-m", "agents.mj_interaction"]
+    
+    # Убираем security_opt для Windows совместимости
+    # cap_add и security_opt могут не работать в Windows
+      
+  # Отключаем сложные сервисы для первого запуска
+  nginx:
+    profiles:
+      - production
+      
+  prometheus:
+    profiles:
+      - monitoring
+      
+  grafana:
+    profiles:
+      - monitoring

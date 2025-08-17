@@ -1,0 +1,46 @@
+# Специальная конфигурация для Windows
+# Chrome в Docker на Windows требует дополнительных настроек
+
+services:
+  # MJ Interaction - временно отключаем для диагностики
+  mj-interaction:
+    # Убираем проблемные Linux volumes
+    volumes:
+      - ./logs:/app/logs
+      
+    # Увеличиваем shared memory для Chrome
+    tmpfs:
+      - /tmp:exec,mode=1777
+      - /dev/shm:rw,noexec,nosuid,size=2g
+      
+    # Простой entrypoint
+    entrypoint: ["python", "-m", "agents.mj_interaction"]
+    
+    # Убираем Linux security настройки
+    cap_add: []
+    security_opt: []
+    
+    # Chrome настройки для Windows Docker
+    environment:
+      - SELENIUM_HEADLESS=1
+      - CHROME_HEADLESS=1
+      - NO_DISPLAY=1
+      - CHROME_NO_SANDBOX=1
+      - CHROME_DISABLE_GPU=1
+      
+    # Временно останавливаем для тестирования системы
+    profiles:
+      - chrome-debug
+      
+  # Отключаем сложные сервисы
+  nginx:
+    profiles:
+      - disabled
+      
+  prometheus:
+    profiles:  
+      - disabled
+      
+  grafana:
+    profiles:
+      - disabled

@@ -1,0 +1,228 @@
+# version: '3.8'  # Removed - obsolete in new Docker Compose
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: mj-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mjsystem
+      POSTGRES_USER: mjuser
+      POSTGRES_PASSWORD: mjpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mjuser -d mjsystem"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Queue
+  redis:
+    image: redis:7-alpine
+    container_name: mj-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Central Orchestrator
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orchestrator
+    container_name: mj-orchestrator
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MJ Interaction Agent  
+  mj-interaction:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mj-interaction
+    container_name: mj-interaction-agent
+    ports: 
+      - "5900:5900"
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    shm_size: "2g"
+    tmpfs:
+      - /tmp:exec,mode=1777
+    environment:
+      - UCD_HEADLESS=true
+      - SELENIUM_HEADLESS=1
+      - CHROME_HEADLESS=1
+      - NO_DISPLAY=1
+    entrypoint: ["/bin/sh", "-lc", "chown root:root /tmp/.X11-unix 2>/dev/null || true; chmod 1777 /tmp/.X11-unix 2>/dev/null || true; exec python -m agents.mj_interaction"]
+    volumes:
+      - ./logs:/app/logs
+      - /dev/shm:/dev/shm
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+
+  # Trend Parser Agent
+  trend-parser:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.trend-parser
+    container_name: trend-parser-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  # Prompt Expander Agent
+  prompt-expander:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.prompt-expander
+    container_name: prompt-expander-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  # Video Compiler Agent
+  video-compiler:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.video-compiler
+    container_name: video-compiler-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - video_temp:/tmp/video
+
+  # Publisher Agent
+  publisher:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.publisher
+    container_name: publisher-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  # Review Bridge (Telegram Bot)
+  review-bridge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.review-bridge
+    container_name: review-bridge-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  # Nginx Reverse Proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: mj-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - orchestrator
+    profiles:
+      - production
+
+  # Monitoring (optional)
+  prometheus:
+    image: prom/prometheus
+    container_name: mj-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana
+    container_name: mj-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  video_temp:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  default:
+    name: mj-automation-network
